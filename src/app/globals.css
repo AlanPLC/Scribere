@@ -24,3 +24,28 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Minimalist scrollbar — used on the transcript panel so only it scrolls,
+   never the page itself. */
+.scroll-minimal {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 120, 0.5) transparent;
+}
+
+.scroll-minimal::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scroll-minimal::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-minimal::-webkit-scrollbar-thumb {
+  background-color: rgba(120, 120, 120, 0.4);
+  border-radius: 9999px;
+}
+
+.scroll-minimal::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(120, 120, 120, 0.65);
+}
