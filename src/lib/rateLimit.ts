@@ -16,17 +16,23 @@ interface LimitConfig {
   cappedWindow: Duration;
 }
 
-// Two named buckets per IP:
-// - "transcribe" protects the shared Groq quota (the expensive step).
+// Named buckets per IP:
+// - "transcribe" protects the shared Groq quota — consumed once per video
+//   (on job start), not per chunk, since a long video can need many steps.
 // - "lookup" just keeps a bot from hammering YouTube's endpoint via
 //   /api/languages; it doesn't touch Groq so it can be more generous.
+// - "step" guards /api/transcribe/step, which the client polls repeatedly
+//   while a job runs. It doesn't call Groq unless our own quota check says
+//   there's room (so it can't be used to burn the shared quota faster),
+//   but still needs a ceiling against a client hammering it pointlessly.
 // Each has a short burst guard (kills fast scripted hammering) and a
-// longer capped window. Both are backed by Upstash so the count is real
+// longer capped window. All are backed by Upstash so the count is real
 // across every serverless instance, not just the one that handled the
 // request.
 const CONFIGS: Record<string, LimitConfig> = {
   transcribe: { burstLimit: 1, burstWindow: "20 s", cappedLimit: 5, cappedWindow: "1 h" },
   lookup: { burstLimit: 1, burstWindow: "5 s", cappedLimit: 20, cappedWindow: "1 h" },
+  step: { burstLimit: 3, burstWindow: "2 s", cappedLimit: 600, cappedWindow: "1 h" },
 };
 
 type LimiterName = keyof typeof CONFIGS;

@@ -107,17 +107,39 @@ export async function getQuotaSnapshot(): Promise<GroqQuotaSnapshot | null> {
   return null;
 }
 
+/** How much of a reset window is left, accounting for time already elapsed since the snapshot was taken. */
+function msRemaining(snapshot: GroqQuotaSnapshot, resetMs: number): number {
+  const elapsed = Date.now() - snapshot.updatedAt;
+  return Math.max(1000, resetMs - elapsed);
+}
+
 /**
  * Cheap pre-flight check so we can refuse with a friendly message instead
  * of burning a request against Groq just to get a 429 back. Errs on the
  * side of allowing the request when we don't have a snapshot yet (e.g.
  * right after a cold start, or once the cached snapshot has expired) —
  * that request's real response is what refreshes the cache.
+ *
+ * When not ok, `retryInMs` estimates how long until the specific limit
+ * that's blocking us (requests or tokens) should have room again.
  */
-export async function hasQuotaRemaining(): Promise<{ ok: boolean; snapshot: GroqQuotaSnapshot | null }> {
+export async function hasQuotaRemaining(): Promise<{
+  ok: boolean;
+  snapshot: GroqQuotaSnapshot | null;
+  retryInMs: number;
+}> {
   const snapshot = await getQuotaSnapshot();
-  if (!snapshot) return { ok: true, snapshot: null };
+  if (!snapshot) return { ok: true, snapshot: null, retryInMs: 0 };
 
-  const ok = snapshot.remainingRequests > 0 && snapshot.remainingTokens >= MIN_TOKENS_FOR_A_REQUEST;
-  return { ok, snapshot };
+  const requestsOut = snapshot.remainingRequests <= 0;
+  const tokensOut = snapshot.remainingTokens < MIN_TOKENS_FOR_A_REQUEST;
+  const ok = !requestsOut && !tokensOut;
+
+  const retryInMs = ok
+    ? 0
+    : requestsOut
+      ? msRemaining(snapshot, snapshot.resetRequestsMs)
+      : msRemaining(snapshot, snapshot.resetTokensMs);
+
+  return { ok, snapshot, retryInMs };
 }

@@ -1,18 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchRawTranscript, getVideoTitle, TranscriptError } from "@/lib/youtube";
-import { addCoherence, QuotaExceededError } from "@/lib/coherence";
+import { splitIntoChunks } from "@/lib/coherence";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { hasQuotaRemaining } from "@/lib/quota";
+import { newJobId, saveJob, type TranscribeJob } from "@/lib/jobs";
 import { getClientIp } from "@/lib/ip";
 import { isSameOrigin } from "@/lib/origin";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  // Defense-in-depth against casual scripted abuse hitting the API directly
-  // from another site. Doesn't stop a determined bot that spoofs headers —
-  // that's what the per-IP rate limit below is for.
   if (!isSameOrigin(req)) {
     return NextResponse.json({ error: "Origen no permitido." }, { status: 403 });
   }
@@ -29,22 +25,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: message }, { status: 429 });
   }
 
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
+  if (!process.env.GROQ_API_KEY) {
     return NextResponse.json(
       { error: "El servidor no tiene configurada la API key de Groq (GROQ_API_KEY)." },
       { status: 500 }
-    );
-  }
-
-  const quota = await hasQuotaRemaining();
-  if (!quota.ok) {
-    return NextResponse.json(
-      {
-        error:
-          "Se agotó la cuota compartida de IA por ahora (la usan todos los que visitan el sitio). Probá de nuevo más tarde.",
-      },
-      { status: 503 }
     );
   }
 
@@ -64,21 +48,34 @@ export async function POST(req: NextRequest) {
       fetchRawTranscript(body.url, body.lang),
       getVideoTitle(body.url).catch(() => ""),
     ]);
-    const coherent = await addCoherence(raw.text, apiKey, title);
 
-    return NextResponse.json({
+    const chunks = splitIntoChunks(raw.text);
+
+    const job: TranscribeJob = {
+      id: newJobId(),
       videoId: raw.videoId,
       lang: raw.lang,
+      title,
       rawText: raw.text,
-      coherentText: coherent.text,
-      remaining: rateLimit.remaining,
+      chunks,
+      editedChunks: [],
+      currentIndex: 0,
+      status: "processing",
+      createdAt: Date.now(),
+    };
+    await saveJob(job);
+
+    return NextResponse.json({
+      jobId: job.id,
+      videoId: job.videoId,
+      lang: job.lang,
+      title: job.title,
+      rawText: job.rawText,
+      totalChunks: chunks.length,
     });
   } catch (err) {
     if (err instanceof TranscriptError) {
       return NextResponse.json({ error: err.message }, { status: 422 });
-    }
-    if (err instanceof QuotaExceededError) {
-      return NextResponse.json({ error: err.message }, { status: 503 });
     }
     const message = err instanceof Error ? err.message : "Error desconocido.";
     return NextResponse.json({ error: `Error procesando el video: ${message}` }, { status: 500 });

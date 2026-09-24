@@ -17,6 +17,7 @@ export async function GET(req: NextRequest) {
           remainingTokens: global.remainingTokens,
           limitTokens: global.limitTokens,
           resetRequestsMs: global.resetRequestsMs,
+          resetTokensMs: global.resetTokensMs,
           updatedAt: global.updatedAt,
         }
       : null,

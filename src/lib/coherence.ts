@@ -2,11 +2,9 @@ import Groq, { RateLimitError } from "groq-sdk";
 import { updateQuotaFromHeaders } from "./quota";
 
 const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
-const CHUNK_CHARS = 6000;
+export const CHUNK_CHARS = 6000;
 
-export class QuotaExceededError extends Error {}
-
-function buildSystemPrompt(videoTitle?: string): string {
+export function buildSystemPrompt(videoTitle?: string): string {
   const titleContext = videoTitle
     ? `\n\nEl video se titula: "${videoTitle}". Usá ese título solo como contexto para desambiguar nombres propios, jerga o términos del tema — no lo repitas ni lo menciones en tu respuesta.`
     : "";
@@ -21,7 +19,7 @@ Tu tarea:
 - Devolvé únicamente el texto editado, sin comentarios, títulos ni notas adicionales.${titleContext}`;
 }
 
-function splitIntoChunks(text: string, maxChars: number): string[] {
+export function splitIntoChunks(text: string, maxChars: number = CHUNK_CHARS): string[] {
   if (text.length <= maxChars) return [text];
 
   const words = text.split(" ");
@@ -41,52 +39,46 @@ function splitIntoChunks(text: string, maxChars: number): string[] {
   return chunks;
 }
 
-export interface CoherenceResult {
-  text: string;
-  chunkCount: number;
-}
+export type ChunkResult = { status: "ok"; text: string } | { status: "rate_limited" };
 
-export async function addCoherence(
-  rawText: string,
-  apiKey: string,
-  videoTitle?: string
-): Promise<CoherenceResult> {
+/**
+ * Processes a single chunk through Groq. Returns `rate_limited` instead of
+ * throwing when Groq's per-minute token budget is exhausted, so the caller
+ * (the job step endpoint) can pause and retry that same chunk later instead
+ * of failing the whole transcription.
+ */
+export async function processChunk(
+  chunk: string,
+  systemPrompt: string,
+  apiKey: string
+): Promise<ChunkResult> {
   const client = new Groq({ apiKey });
-  const chunks = splitIntoChunks(rawText, CHUNK_CHARS);
-  const systemPrompt = buildSystemPrompt(videoTitle);
 
-  const edited: string[] = [];
-  for (const chunk of chunks) {
-    let data, response;
-    try {
-      ({ data, response } = await client.chat.completions
-        .create({
-          model: MODEL,
-          temperature: 0.2,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: chunk },
-          ],
-        })
-        .withResponse());
-    } catch (err) {
-      if (err instanceof RateLimitError) {
-        await updateQuotaFromHeaders(err.headers);
-        throw new QuotaExceededError(
-          "Se agotó la cuota compartida de IA justo mientras procesábamos este video. Probá de nuevo en unos minutos."
-        );
-      }
-      throw err;
+  let data, response;
+  try {
+    ({ data, response } = await client.chat.completions
+      .create({
+        model: MODEL,
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: chunk },
+        ],
+      })
+      .withResponse());
+  } catch (err) {
+    if (err instanceof RateLimitError) {
+      await updateQuotaFromHeaders(err.headers);
+      return { status: "rate_limited" };
     }
-
-    await updateQuotaFromHeaders(response.headers);
-
-    const content = data.choices[0]?.message?.content?.trim();
-    if (!content) {
-      throw new Error("La IA no devolvió contenido para uno de los fragmentos.");
-    }
-    edited.push(content);
+    throw err;
   }
 
-  return { text: edited.join("\n\n"), chunkCount: chunks.length };
+  await updateQuotaFromHeaders(response.headers);
+
+  const content = data.choices[0]?.message?.content?.trim();
+  if (!content) {
+    throw new Error("La IA no devolvió contenido para uno de los fragmentos.");
+  }
+  return { status: "ok", text: content };
 }

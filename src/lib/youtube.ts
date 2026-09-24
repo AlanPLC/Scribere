@@ -2,6 +2,11 @@ import { YoutubeTranscript } from "youtube-transcript";
 
 export class TranscriptError extends Error {}
 
+// Above this, a video's transcript needs so many AI chunks that it risks
+// hogging the shared Groq quota for a long stretch (or timing out). Keeps
+// the site usable for everyone instead of one huge video blocking it.
+export const MAX_VIDEO_SECONDS = 60 * 60;
+
 /**
  * Accepts a full YouTube URL or a bare video ID and returns the video ID.
  */
@@ -54,6 +59,7 @@ export interface CaptionLanguage {
 async function fetchPlayerData(videoId: string): Promise<{
   captionTracks: RawCaptionTrack[];
   title: string;
+  durationSeconds: number;
 }> {
   const resp = await fetch(INNERTUBE_API_URL, {
     method: "POST",
@@ -75,6 +81,7 @@ async function fetchPlayerData(videoId: string): Promise<{
   return {
     captionTracks: data?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [],
     title: data?.videoDetails?.title ?? "",
+    durationSeconds: Number(data?.videoDetails?.lengthSeconds) || 0,
   };
 }
 
@@ -85,22 +92,40 @@ async function fetchPlayerData(videoId: string): Promise<{
 export async function listAvailableLanguages(input: string): Promise<{
   videoId: string;
   title: string;
+  durationSeconds: number;
   languages: CaptionLanguage[];
 }> {
   const videoId = extractVideoId(input);
-  const { captionTracks, title } = await fetchPlayerData(videoId);
+  const { captionTracks, title, durationSeconds } = await fetchPlayerData(videoId);
+
+  if (durationSeconds > MAX_VIDEO_SECONDS) {
+    const maxMinutes = Math.round(MAX_VIDEO_SECONDS / 60);
+    throw new TranscriptError(
+      `Este video dura más de ${maxMinutes} minutos. Por ahora, para no agotar la cuota compartida de IA, el límite es de ${maxMinutes} minutos por video.`
+    );
+  }
 
   if (!captionTracks.length) {
     throw new TranscriptError("Este video no tiene subtítulos disponibles.");
   }
 
+  // A video can have both a manual and an auto-generated track for the
+  // same language code. The underlying fetch can only select by language
+  // code (not by manual-vs-generated), so the two would be ambiguous to
+  // pick between anyway — keep the manual one since it's higher quality.
+  const byCode = new Map<string, boolean>();
+  for (const t of captionTracks) {
+    const isGenerated = t.kind === "asr";
+    if (!byCode.has(t.languageCode) || byCode.get(t.languageCode) === true) {
+      byCode.set(t.languageCode, isGenerated);
+    }
+  }
+
   return {
     videoId,
     title,
-    languages: captionTracks.map((t) => ({
-      code: t.languageCode,
-      isGenerated: t.kind === "asr",
-    })),
+    durationSeconds,
+    languages: Array.from(byCode, ([code, isGenerated]) => ({ code, isGenerated })),
   };
 }
 
