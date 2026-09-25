@@ -5,6 +5,7 @@ import { getClientIp } from "@/lib/ip";
 import { isSameOrigin } from "@/lib/origin";
 
 export const runtime = "nodejs";
+export const maxDuration = 15;
 
 export async function POST(req: NextRequest) {
   if (!isSameOrigin(req)) {
