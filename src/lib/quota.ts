@@ -90,7 +90,11 @@ export async function updateQuotaFromHeaders(headers: Headers): Promise<void> {
 
   const redis = getRedis();
   if (redis) {
-    await redis.set(REDIS_KEY, snapshot, { ex: ttlSeconds });
+    try {
+      await redis.set(REDIS_KEY, snapshot, { ex: ttlSeconds });
+    } catch (err) {
+      console.error("[quota] failed to cache quota snapshot in Redis:", err);
+    }
   } else {
     memorySnapshot = { snapshot, expiresAt: Date.now() + ttlSeconds * 1000 };
   }
@@ -99,7 +103,12 @@ export async function updateQuotaFromHeaders(headers: Headers): Promise<void> {
 export async function getQuotaSnapshot(): Promise<GroqQuotaSnapshot | null> {
   const redis = getRedis();
   if (redis) {
-    return (await redis.get<GroqQuotaSnapshot>(REDIS_KEY)) ?? null;
+    try {
+      return (await redis.get<GroqQuotaSnapshot>(REDIS_KEY)) ?? null;
+    } catch (err) {
+      console.error("[quota] failed to read quota snapshot from Redis:", err);
+      return null;
+    }
   }
   if (memorySnapshot && memorySnapshot.expiresAt > Date.now()) {
     return memorySnapshot.snapshot;

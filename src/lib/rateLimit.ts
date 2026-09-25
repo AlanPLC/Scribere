@@ -107,39 +107,55 @@ export async function getIpRemaining(name: LimiterName, key: string): Promise<Ip
     return { remaining: Math.max(0, cappedLimit - timestamps.length), limit: cappedLimit };
   }
 
-  const { remaining } = await limiters.capped.getRemaining(key);
-  return { remaining, limit: cappedLimit };
+  try {
+    const { remaining } = await limiters.capped.getRemaining(key);
+    return { remaining, limit: cappedLimit };
+  } catch (err) {
+    console.error(`[rateLimit] getIpRemaining("${name}") failed, reporting full quota:`, err);
+    return { remaining: cappedLimit, limit: cappedLimit };
+  }
 }
 
+/**
+ * A misconfigured or momentarily unreachable Upstash instance should never
+ * take the whole site down — rate limiting is a protection, not core
+ * functionality. If the Redis-backed check itself fails, fail open (allow
+ * the request) and log server-side so it's still visible in Vercel's logs.
+ */
 export async function checkRateLimit(name: LimiterName, key: string): Promise<RateLimitResult> {
   const limiters = getLimiters(name);
   if (!limiters) {
     return checkInMemory(name, key);
   }
 
-  const burst = await limiters.burst.limit(key);
-  if (!burst.success) {
-    return {
-      allowed: false,
-      remaining: 0,
-      resetInMs: Math.max(0, burst.reset - Date.now()),
-      reason: "burst",
-    };
-  }
+  try {
+    const burst = await limiters.burst.limit(key);
+    if (!burst.success) {
+      return {
+        allowed: false,
+        remaining: 0,
+        resetInMs: Math.max(0, burst.reset - Date.now()),
+        reason: "burst",
+      };
+    }
 
-  const capped = await limiters.capped.limit(key);
-  if (!capped.success) {
+    const capped = await limiters.capped.limit(key);
+    if (!capped.success) {
+      return {
+        allowed: false,
+        remaining: 0,
+        resetInMs: Math.max(0, capped.reset - Date.now()),
+        reason: "capped",
+      };
+    }
+
     return {
-      allowed: false,
-      remaining: 0,
+      allowed: true,
+      remaining: capped.remaining,
       resetInMs: Math.max(0, capped.reset - Date.now()),
-      reason: "capped",
     };
+  } catch (err) {
+    console.error(`[rateLimit] checkRateLimit("${name}") failed, failing open:`, err);
+    return { allowed: true, remaining: 0, resetInMs: 0 };
   }
-
-  return {
-    allowed: true,
-    remaining: capped.remaining,
-    resetInMs: Math.max(0, capped.reset - Date.now()),
-  };
 }
