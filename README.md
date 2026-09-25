@@ -1,6 +1,6 @@
 # Transcriptor de YouTube
 
-Transcriptor web gratuito de videos de YouTube: baja los subtítulos automáticos del video y les aplica coherencia (puntuación, párrafos, corrección de errores obvios) usando un modelo de IA a través de [Groq](https://groq.com) (capa gratuita).
+Transcriptor web gratuito de videos de YouTube: baja los subtítulos automáticos del video y los deja prolijos (puntuación, párrafos, corrección de errores obvios) usando un modelo de IA a través de [Groq](https://groq.com) (capa gratuita).
 
 ## Cómo funciona
 

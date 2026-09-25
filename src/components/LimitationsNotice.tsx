@@ -13,7 +13,7 @@ export function LimitationsNotice() {
         </li>
         <li>No transcribe videos de más de 1 hora.</li>
         <li>Necesita que el video tenga subtítulos (automáticos o manuales) habilitados en YouTube.</li>
-        <li>La coherencia la agrega una IA y puede cometer errores, revisá el resultado antes de usarlo para algo importante.</li>
+        <li>El texto prolijo lo genera una IA y puede tener errores, revisá el resultado antes de usarlo para algo importante.</li>
       </ul>
     </div>
   );

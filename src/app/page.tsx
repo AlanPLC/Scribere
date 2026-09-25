@@ -13,7 +13,7 @@ interface TranscribeResult {
   videoId: string;
   lang: string;
   rawText: string;
-  coherentText: string;
+  coherentText: string | null;
 }
 
 interface Progress {
@@ -174,14 +174,7 @@ export default function Home() {
       }
 
       if (data.status === "done") {
-        setResult({
-          videoId: data.videoId!,
-          lang: data.lang!,
-          rawText: data.rawText!,
-          coherentText: data.coherentText!,
-        });
-        setTab("coherent");
-        setStep("result");
+        setResult((prev) => (prev ? { ...prev, coherentText: data.coherentText! } : prev));
         break;
       }
 
@@ -223,6 +216,14 @@ export default function Home() {
         return;
       }
 
+      setResult({
+        videoId: data.videoId,
+        lang: data.lang,
+        rawText: data.rawText,
+        coherentText: null,
+      });
+      setTab("raw");
+      setStep("result");
       setProgress({ currentIndex: 0, totalChunks: data.totalChunks, waiting: false });
       await pollJob(data.jobId);
     } catch {
@@ -244,7 +245,7 @@ export default function Home() {
 
   function handleCopy() {
     if (!result) return;
-    const text = tab === "coherent" ? result.coherentText : result.rawText;
+    const text = (tab === "coherent" ? result.coherentText : result.rawText) ?? "";
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
@@ -252,7 +253,7 @@ export default function Home() {
 
   function handleDownload() {
     if (!result) return;
-    const text = tab === "coherent" ? result.coherentText : result.rawText;
+    const text = (tab === "coherent" ? result.coherentText : result.rawText) ?? "";
     const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -262,12 +263,15 @@ export default function Home() {
   }
 
   return (
-    <main className="flex-1 min-h-0 flex flex-col px-4 sm:px-6">
+    <main className="flex-1 min-h-0 flex flex-col px-3 sm:px-4">
       <header className="shrink-0 pt-10 sm:pt-16 pb-3 max-w-6xl w-full mx-auto">
-        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Transcriptor de YouTube</h1>
+        <div className="flex items-baseline gap-2">
+          <span className="text-2xl sm:text-3xl font-bold tracking-tight text-[#7EF561]">Scribere</span>
+          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Transcriptor de YouTube</h1>
+        </div>
         {step === "url" && (
           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-            Pegá el link de un video y obtené su transcripción con coherencia, gratis.
+            Pegá el link de un video y obtené su transcripción prolija, gratis.
           </p>
         )}
       </header>
@@ -329,36 +333,8 @@ export default function Home() {
                 {loading ? "Transcribiendo…" : "Transcribir"}
               </button>
 
-              {loading && !progress && (
+              {loading && (
                 <p className="text-sm text-neutral-500 dark:text-neutral-400">Bajando subtítulos…</p>
-              )}
-
-              {loading && progress && (
-                <div className="flex flex-col gap-1.5">
-                  <div className="h-1.5 w-full rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
-                    <div
-                      className="h-full bg-neutral-900 dark:bg-neutral-100 transition-all duration-300"
-                      style={{
-                        width: `${
-                          progress.totalChunks > 0
-                            ? Math.round((progress.currentIndex / progress.totalChunks) * 100)
-                            : 0
-                        }%`,
-                      }}
-                    />
-                  </div>
-                  <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                    {progress.waiting
-                      ? `Esperando cupo compartido de IA, sigue en ${formatWait(progress.retryInMs)}${
-                          progress.totalChunks > 1
-                            ? ` (fragmento ${progress.currentIndex + 1} de ${progress.totalChunks})`
-                            : ""
-                        }`
-                      : progress.totalChunks > 1
-                        ? `Aplicando coherencia con IA, fragmento ${progress.currentIndex} de ${progress.totalChunks}…`
-                        : "Aplicando coherencia con IA…"}
-                  </p>
-                </div>
               )}
             </div>
           )}
@@ -367,35 +343,44 @@ export default function Home() {
 
           {result && step === "result" && (
             <div className="flex-1 min-h-0 flex flex-col gap-3">
-              <div className="flex items-center justify-between text-sm gap-2">
-                <span className="font-medium truncate" title={videoTitle || url}>
-                  {videoTitle || url}
-                </span>
-                <button onClick={handleReset} className="text-neutral-500 hover:underline shrink-0">
-                  Transcribir otro video
-                </button>
-              </div>
+              <span className="text-sm font-medium truncate" title={videoTitle || url}>
+                {videoTitle || url}
+              </span>
 
               <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex gap-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 p-1 text-sm">
-                  <button
-                    onClick={() => setTab("coherent")}
-                    className={`px-3 py-1.5 rounded-md ${
-                      tab === "coherent"
-                        ? "bg-white dark:bg-neutral-700 shadow-sm font-medium"
-                        : "text-neutral-500"
-                    }`}
-                  >
-                    Con coherencia
-                  </button>
-                  <button
-                    onClick={() => setTab("raw")}
-                    className={`px-3 py-1.5 rounded-md ${
-                      tab === "raw" ? "bg-white dark:bg-neutral-700 shadow-sm font-medium" : "text-neutral-500"
-                    }`}
-                  >
-                    Texto crudo
-                  </button>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex gap-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 p-1 text-sm">
+                    <button
+                      onClick={() => setTab("coherent")}
+                      disabled={!result.coherentText}
+                      className={`px-3 py-1.5 rounded-md disabled:opacity-40 disabled:cursor-not-allowed ${
+                        tab === "coherent"
+                          ? "bg-white dark:bg-neutral-700 shadow-sm font-medium"
+                          : "text-neutral-500"
+                      }`}
+                    >
+                      Texto prolijo
+                    </button>
+                    <button
+                      onClick={() => setTab("raw")}
+                      className={`px-3 py-1.5 rounded-md ${
+                        tab === "raw" ? "bg-white dark:bg-neutral-700 shadow-sm font-medium" : "text-neutral-500"
+                      }`}
+                    >
+                      Texto crudo
+                    </button>
+                  </div>
+
+                  {loading && (
+                    <span className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                      <span className="h-3 w-3 rounded-full border-2 border-neutral-400 border-t-transparent animate-spin" />
+                      {progress?.waiting
+                        ? `Esperando cupo de IA, sigue en ${formatWait(progress.retryInMs)}`
+                        : progress && progress.totalChunks > 1
+                          ? `Ordenando el texto con IA, fragmento ${progress.currentIndex} de ${progress.totalChunks}…`
+                          : "Ordenando el texto con IA…"}
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex gap-2">
@@ -415,13 +400,13 @@ export default function Home() {
               </div>
 
               <div className="flex-1 min-h-0 overflow-y-auto scroll-minimal rounded-lg border border-neutral-200 dark:border-neutral-800 p-5 whitespace-pre-wrap text-sm leading-relaxed">
-                {tab === "coherent" ? result.coherentText : result.rawText}
+                {(tab === "coherent" ? result.coherentText : result.rawText) ?? ""}
               </div>
             </div>
           )}
         </section>
 
-        <aside className="lg:w-72 shrink-0 flex flex-col gap-4">
+        <aside className="lg:w-72 shrink-0 min-h-0 flex flex-col gap-4 overflow-y-auto scroll-minimal">
           <StatsPanel quota={quota} />
 
           {step === "result" && (
