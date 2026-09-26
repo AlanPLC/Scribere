@@ -95,9 +95,22 @@ async function fetchPlayerDataViaInnerTube(videoId: string): Promise<PlayerData 
         videoId,
       }),
     });
-    if (!resp.ok) return null;
-    return extractPlayerData(await resp.json());
-  } catch {
+    if (!resp.ok) {
+      console.error(`[youtube] InnerTube fetch for ${videoId} returned HTTP ${resp.status}`);
+      return null;
+    }
+    const json = await resp.json();
+    const parsed = extractPlayerData(json);
+    if (parsed.captionTracks.length === 0) {
+      console.error(
+        `[youtube] InnerTube fetch for ${videoId} returned 0 caption tracks. playabilityStatus:`,
+        json?.playabilityStatus?.status,
+        json?.playabilityStatus?.reason
+      );
+    }
+    return parsed;
+  } catch (err) {
+    console.error(`[youtube] InnerTube fetch for ${videoId} threw:`, err);
     return null;
   }
 }
@@ -132,16 +145,35 @@ async function fetchPlayerDataFromWatchPage(videoId: string): Promise<PlayerData
       headers: {
         "User-Agent": WATCH_PAGE_USER_AGENT,
         "Accept-Language": "en-US,en;q=0.9",
+        // Without this, YouTube serves an EU cookie-consent interstitial
+        // page instead of the real watch page to IPs it geolocates as
+        // European (which covers a lot of cloud/datacenter ranges) — that
+        // page has no ytInitialPlayerResponse at all.
+        Cookie: "CONSENT=YES+cb.20240101-00-p0.en+FX+000",
       },
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      console.error(`[youtube] Watch page fetch for ${videoId} returned HTTP ${resp.status}`);
+      return null;
+    }
 
     const html = await resp.text();
     const data = parseInitialPlayerResponse(html);
-    if (!data) return null;
+    if (!data) {
+      console.error(
+        `[youtube] Watch page fetch for ${videoId} had no ytInitialPlayerResponse. HTML length: ${html.length}, snippet:`,
+        html.slice(0, 300)
+      );
+      return null;
+    }
 
-    return extractPlayerData(data as Parameters<typeof extractPlayerData>[0]);
-  } catch {
+    const parsed = extractPlayerData(data as Parameters<typeof extractPlayerData>[0]);
+    if (parsed.captionTracks.length === 0) {
+      console.error(`[youtube] Watch page fetch for ${videoId} parsed OK but found 0 caption tracks.`);
+    }
+    return parsed;
+  } catch (err) {
+    console.error(`[youtube] Watch page fetch for ${videoId} threw:`, err);
     return null;
   }
 }
