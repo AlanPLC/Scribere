@@ -45,6 +45,15 @@ const INNERTUBE_API_URL = "https://www.youtube.com/youtubei/v1/player?prettyPrin
 const INNERTUBE_CLIENT_VERSION = "20.10.38";
 const INNERTUBE_USER_AGENT = `com.google.android.youtube/${INNERTUBE_CLIENT_VERSION} (Linux; U; Android 14)`;
 
+// Cloud/datacenter IPs (Vercel, AWS, etc.) get rate-limited or silently
+// stonewalled by the ANDROID InnerTube client far more than home IPs do —
+// it can come back with zero caption tracks even for a video that clearly
+// has them. Falling back to scraping the public watch page (same trick
+// the youtube-transcript library uses for its own fallback) recovers most
+// of the time, since it's indistinguishable from a normal browser visit.
+const WATCH_PAGE_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
 interface RawCaptionTrack {
   languageCode: string;
   kind?: string;
@@ -56,33 +65,100 @@ export interface CaptionLanguage {
   isGenerated: boolean;
 }
 
-async function fetchPlayerData(videoId: string): Promise<{
+interface PlayerData {
   captionTracks: RawCaptionTrack[];
   title: string;
   durationSeconds: number;
-}> {
-  const resp = await fetch(INNERTUBE_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": INNERTUBE_USER_AGENT,
-    },
-    body: JSON.stringify({
-      context: { client: { clientName: "ANDROID", clientVersion: INNERTUBE_CLIENT_VERSION } },
-      videoId,
-    }),
-  });
+}
 
-  if (!resp.ok) {
-    throw new TranscriptError("No se pudo consultar la información de este video.");
-  }
-
-  const data = await resp.json();
+function extractPlayerData(data: {
+  captions?: { playerCaptionsTracklistRenderer?: { captionTracks?: RawCaptionTrack[] } };
+  videoDetails?: { title?: string; lengthSeconds?: string | number };
+}): PlayerData {
   return {
     captionTracks: data?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [],
     title: data?.videoDetails?.title ?? "",
     durationSeconds: Number(data?.videoDetails?.lengthSeconds) || 0,
   };
+}
+
+async function fetchPlayerDataViaInnerTube(videoId: string): Promise<PlayerData | null> {
+  try {
+    const resp = await fetch(INNERTUBE_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": INNERTUBE_USER_AGENT,
+      },
+      body: JSON.stringify({
+        context: { client: { clientName: "ANDROID", clientVersion: INNERTUBE_CLIENT_VERSION } },
+        videoId,
+      }),
+    });
+    if (!resp.ok) return null;
+    return extractPlayerData(await resp.json());
+  } catch {
+    return null;
+  }
+}
+
+/** Pulls the inline `var ytInitialPlayerResponse = {...};` JSON blob out of the watch page HTML. */
+function parseInitialPlayerResponse(html: string): Record<string, unknown> | null {
+  const startToken = "var ytInitialPlayerResponse = ";
+  const startIndex = html.indexOf(startToken);
+  if (startIndex === -1) return null;
+
+  const jsonStart = startIndex + startToken.length;
+  let depth = 0;
+  for (let i = jsonStart; i < html.length; i++) {
+    if (html[i] === "{") depth++;
+    else if (html[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(html.slice(jsonStart, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function fetchPlayerDataFromWatchPage(videoId: string): Promise<PlayerData | null> {
+  try {
+    const resp = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        "User-Agent": WATCH_PAGE_USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    if (!resp.ok) return null;
+
+    const html = await resp.text();
+    const data = parseInitialPlayerResponse(html);
+    if (!data) return null;
+
+    return extractPlayerData(data as Parameters<typeof extractPlayerData>[0]);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPlayerData(videoId: string): Promise<PlayerData> {
+  const viaInnerTube = await fetchPlayerDataViaInnerTube(videoId);
+  if (viaInnerTube && viaInnerTube.captionTracks.length > 0) {
+    return viaInnerTube;
+  }
+
+  const viaWatchPage = await fetchPlayerDataFromWatchPage(videoId);
+  if (viaWatchPage) {
+    return viaWatchPage;
+  }
+
+  if (viaInnerTube) return viaInnerTube;
+  throw new TranscriptError("No se pudo consultar la información de este video.");
 }
 
 /**
