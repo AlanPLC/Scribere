@@ -38,12 +38,29 @@ export function extractVideoId(input: string): string {
   throw new TranscriptError("No se pudo reconocer un ID de video de YouTube en esa URL.");
 }
 
-// Same InnerTube endpoint / Android client context the youtube-transcript
-// library uses internally to read caption tracks — replicated here because
-// the library only exposes "fetch the transcript", not "list the tracks".
+// Same InnerTube endpoint the youtube-transcript library uses internally to
+// read caption tracks — replicated here because the library only exposes
+// "fetch the transcript", not "list the tracks".
 const INNERTUBE_API_URL = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
-const INNERTUBE_CLIENT_VERSION = "20.10.38";
-const INNERTUBE_USER_AGENT = `com.google.android.youtube/${INNERTUBE_CLIENT_VERSION} (Linux; U; Android 14)`;
+
+// Different InnerTube "app" clients get different bot-detection treatment
+// from YouTube, and it shifts over time — a client that sails through today
+// can start returning LOGIN_REQUIRED ("Sign in to confirm you're not a
+// bot") tomorrow, especially from datacenter IPs like Vercel's. Trying a
+// few in order costs nothing and each one that still works buys time until
+// YouTube closes it off too.
+const INNERTUBE_CLIENTS = [
+  {
+    name: "ANDROID",
+    version: "20.10.38",
+    userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 14)",
+  },
+  {
+    name: "IOS",
+    version: "20.10.4",
+    userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)",
+  },
+] as const;
 
 // Cloud/datacenter IPs (Vercel, AWS, etc.) get rate-limited or silently
 // stonewalled by the ANDROID InnerTube client far more than home IPs do —
@@ -82,37 +99,50 @@ function extractPlayerData(data: {
   };
 }
 
-async function fetchPlayerDataViaInnerTube(videoId: string): Promise<PlayerData | null> {
+async function fetchPlayerDataViaInnerTubeClient(
+  videoId: string,
+  client: (typeof INNERTUBE_CLIENTS)[number]
+): Promise<PlayerData | null> {
   try {
     const resp = await fetch(INNERTUBE_API_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "User-Agent": INNERTUBE_USER_AGENT,
+        "User-Agent": client.userAgent,
       },
       body: JSON.stringify({
-        context: { client: { clientName: "ANDROID", clientVersion: INNERTUBE_CLIENT_VERSION } },
+        context: { client: { clientName: client.name, clientVersion: client.version } },
         videoId,
       }),
     });
     if (!resp.ok) {
-      console.error(`[youtube] InnerTube fetch for ${videoId} returned HTTP ${resp.status}`);
+      console.error(`[youtube] InnerTube/${client.name} fetch for ${videoId} returned HTTP ${resp.status}`);
       return null;
     }
     const json = await resp.json();
     const parsed = extractPlayerData(json);
     if (parsed.captionTracks.length === 0) {
       console.error(
-        `[youtube] InnerTube fetch for ${videoId} returned 0 caption tracks. playabilityStatus:`,
+        `[youtube] InnerTube/${client.name} fetch for ${videoId} returned 0 caption tracks. playabilityStatus:`,
         json?.playabilityStatus?.status,
         json?.playabilityStatus?.reason
       );
     }
     return parsed;
   } catch (err) {
-    console.error(`[youtube] InnerTube fetch for ${videoId} threw:`, err);
+    console.error(`[youtube] InnerTube/${client.name} fetch for ${videoId} threw:`, err);
     return null;
   }
+}
+
+async function fetchPlayerDataViaInnerTube(videoId: string): Promise<PlayerData | null> {
+  let bestEffort: PlayerData | null = null;
+  for (const client of INNERTUBE_CLIENTS) {
+    const result = await fetchPlayerDataViaInnerTubeClient(videoId, client);
+    if (result && result.captionTracks.length > 0) return result;
+    bestEffort = bestEffort ?? result;
+  }
+  return bestEffort;
 }
 
 /** Pulls the inline `var ytInitialPlayerResponse = {...};` JSON blob out of the watch page HTML. */
